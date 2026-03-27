@@ -1,0 +1,1 @@
+# Detecting_Schizophrenia_from_T1W_MRIS
