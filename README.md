@@ -1,6 +1,6 @@
 # Detecting Schizophrenia from T1W MRIs
 
-A research project at KMIT that uses deep learning to detect schizophrenia from structural T1-weighted MRI scans. We train and compare two models a 2D CNN (ResNet-18) and a 3D CNN (SE-VGG-11BN) across four open-access neuroimaging datasets.
+A research project at KMIT that uses deep learning to detect schizophrenia from structural T1-weighted MRI scans. We train a 3D CNN (SE-VGG-11BN) on whole-brain volumes across four open-access neuroimaging datasets.
 
 ## Datasets
 
@@ -11,7 +11,7 @@ A research project at KMIT that uses deep learning to detect schizophrenia from 
 | NUSDAST  | 142  | 21   | ANALYZE |
 | COBRE    | 79   | 81   | .nii.gz |
 
-All datasets are publicly available via OpenNeuro and SchizConnect.
+All datasets are publicly available via OpenNeuro and SchizConnect. After harmonization: **568 subjects** (317 SCHZ, 251 CTRL).
 
 ## Pipeline
 
@@ -28,15 +28,77 @@ All datasets are publicly available via OpenNeuro and SchizConnect.
 - Biological variables (diagnosis) are preserved during harmonization
 - Outputs 568 harmonized `.npy` files ready for model training
 
-## Models
+## Model: 3D SE-VGG-11BN (`cnn3d_sevgg_run6_final.py`)
 
-- **2D CNN** : ResNet-18 with transfer learning, slice-based (axial slices 44–84)
-- **3D CNN** : Custom SE-VGG-11BN trained from scratch on whole-brain volumes
+A 3D adaptation of VGG-11 with Batch Normalization and Squeeze-and-Excitation (SE) blocks inserted after every convolutional stage. Trained from scratch on 96×96×96 whole-brain volumes.
+
+### Architecture
+
+```
+Input (1 × 96 × 96 × 96)
+│
+├── Block 1: Conv3D(1→64,  ×1) + BN + ReLU + SE + MaxPool3D
+├── Block 2: Conv3D(64→128, ×1) + BN + ReLU + SE + MaxPool3D
+├── Block 3: Conv3D(128→256, ×2) + BN + ReLU + SE + MaxPool3D
+├── Block 4: Conv3D(256→256, ×2) + BN + ReLU + SE + MaxPool3D
+├── Block 5: Conv3D(256→512, ×2) + BN + ReLU + SE + MaxPool3D
+│
+├── AdaptiveAvgPool3D(1)
+│
+└── Head: Linear(512→256) → ReLU → Dropout(0.5) → Linear(256→1)
+         [BCEWithLogitsLoss, sigmoid output]
+```
+
+**SE Block** — channel-wise attention after each conv stage (ratio=16):
+
+```
+GAP → Flatten → Linear(C→C/16) → ReLU → Linear(C/16→C) → Sigmoid → scale
+```
+
+### Training Configuration
+
+| Hyperparameter | Value                            |
+| -------------- | -------------------------------- |
+| Input size     | 96³                              |
+| Batch size     | 2 (grad accum ×4, effective = 8) |
+| Epochs         | 150 (early stop patience = 20)   |
+| Optimizer      | Adam (lr=1e-5, wd=5e-5)          |
+| Scheduler      | CosineAnnealingLR (η_min=1e-7)   |
+| Loss           | BCEWithLogitsLoss (pos_weight)   |
+| Dropout        | 0.5                              |
+
+### Augmentation (training only, via TorchIO)
+
+| Transform           | Probability |
+| ------------------- | ----------- |
+| RandomNoise         | 0.6         |
+| RandomBlur          | 0.1         |
+| RandomBiasField     | 0.1         |
+| RandomAffine ±10°   | 0.2         |
+| RandomFlip (3 axes) | 0.5         |
+| RandomGamma ±5%     | 0.5         |
+
+### Results
+
+| Metric            | Value            |
+| ----------------- | ---------------- |
+| AUC-ROC           | 0.9497           |
+| Accuracy          | 87.21%           |
+| Sensitivity       | 0.8095           |
+| Specificity       | 0.9318           |
+| Youden's J        | 0.7413           |
+| Optimal threshold | 0.5320           |
+| Subjects          | 568 (4 datasets) |
+
+Threshold selected via Youden's J on the validation set. Grad-CAM visualizations are generated over the last convolutional layer in Block 5 to localize schizophrenia-discriminative brain regions.
+
+Grad-CAM visualizations are generated over the last convolutional layer in Block 5 to localize schizophrenia-discriminative brain regions.
 
 ## Requirements
 
 ```
 torch >= 2.0
+torchio
 antspyx
 nibabel
 scipy
